@@ -1,0 +1,19 @@
+python-dotenv
+
+# LangChain & OpenAI
+langchain
+langchain-openai
+langchain-community
+langchain-chroma
+langsmith
+openai
+tiktoken
+chromadb
+
+# API / Serve
+fastapi==0.112.2
+starlette==0.38.2
+pydantic==2.9.2
+uvicorn
+langserve==0.3.1
+sse-starlette==2.0.0
