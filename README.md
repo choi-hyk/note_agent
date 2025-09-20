@@ -46,15 +46,16 @@ pip install --no-cache-dir "pydantic==2.9.2" "fastapi==0.112.2" "starlette==0.38
 
 ## 4) vscode launch.json
 
-```
+```json
 {
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "(FastAPI) Note Agent",
+            "name": "(FastAPI) Note Agent (venv, Windows)",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
             "args": [
                 "server:app",
                 "--reload",
@@ -65,7 +66,37 @@ pip install --no-cache-dir "pydantic==2.9.2" "fastapi==0.112.2" "starlette==0.38
                 "--log-level",
                 "debug"
             ],
-            "justMyCode": true
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true,
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "(FastAPI) Note Agent (venv, macOS/Linux)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "server:app",
+                "--reload",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000",
+                "--log-level",
+                "debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true,
+            "console": "integratedTerminal"
         }
     ]
 }
