@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -14,8 +14,9 @@ from note_agent.profiles import (
     load_profile,
 )
 
-app = FastAPI(title="Note Agent Service")
+from note_agent.model import ProfileHeadInfo
 
+app = FastAPI(title="Note Agent Service", debug=True)
 
 def make_note_agent():
     """Runnable 에이전트 팩토리(공용 데모).
@@ -71,6 +72,8 @@ class CreateProfileReq(BaseModel):
     """
 
     name: str
+    description: str
+    head_info: Optional[List[ProfileHeadInfo]] = None
 
 
 class AddExamplesReq(BaseModel):

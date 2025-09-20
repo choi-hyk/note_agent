@@ -1,10 +1,13 @@
 import os
+import re
 import glob
 import json
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+from .model import ProfileHeadInfo, ProfileLengthInfo
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -23,33 +26,30 @@ assert os.getenv(
     "OPENAI_API_KEY"
 ), "환경 변수 OPENAI_API_KEY 가 필요합니다 (.env 설정)."
 
-PERSIST_DIR = os.getenv("PERSIST_DIR", "./rag_store")
-EXAMPLE_DIR = os.getenv("EXAMPLE_DIR", "./examples")
-RESULTS_DIR = os.getenv("RESULTS_DIR", "./results")
+PERSIST_DIR = os.getenv("PERSIST_DIR") or "./rag_store"
+EXAMPLE_DIR = os.getenv("EXAMPLE_DIR") or "./examples"
+RESULTS_DIR = os.getenv("RESULTS_DIR") or "./results"
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
+LLM_MODEL = os.getenv("LLM_MODEL") or "gpt-4o-mini"
 
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "900"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "120"))
-RETRIEVE_K = int(os.getenv("RETRIEVE_K", "3"))
-TEMPL_COMPLETE = float(os.getenv("TEMPL_COMPLETE", "0.2"))
-TEMP_SUMMARY = float(os.getenv("TEMP_SUMMARY", "0.3"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE") or "900")
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP") or "120")
+RETRIEVE_K = int(os.getenv("RETRIEVE_K") or "3")
+TEMPL_COMPLETE = float(os.getenv("TEMPL_COMPLETE") or "0.2")
+TEMP_SUMMARY = float(os.getenv("TEMP_SUMMARY") or "0.3")
 
+def _ensure_dir(path: str) -> str:
+    os.makedirs(path, exist_ok=True)
+    return path
+
+_ensure_dir(PERSIST_DIR)
+_ensure_dir(EXAMPLE_DIR)
+_ensure_dir(RESULTS_DIR)
 
 # =========================================
 # Schemas
 # =========================================
-class TOCItem(BaseModel):
-    """목차 항목
-
-    - level: 헤더 레벨 (1, 2, 3)
-    - title: 섹션 제목
-    """
-
-    level: Literal[1, 2, 3]
-    title: str
-
 
 class ChangeLog(BaseModel):
     """변경 사항 로그
@@ -80,7 +80,7 @@ class CompletionOutput(BaseModel):
         change_log: 교정/추가/사실오류 여부를 구조화된 변경 로그로 제공
     """
 
-    toc: List[str] = Field(default_factory=list, description="H1~H3 목차")
+    toc: List[str] = Field(default_factory=list, description="H1~H4 목차")
     completed_text: str
     change_log: ChangeLog
 
@@ -116,14 +116,14 @@ def load_example_texts(path: str = EXAMPLE_DIR) -> List[str]:
     return texts
 
 
-def estimate_target_length(example_texts: List[str]) -> dict:
+def estimate_target_length(example_texts: List[str]) -> ProfileLengthInfo:
     """예시 글을 기반으로 길이를 추정하는 함수
 
     Args:
         example_text (List[str]): 예시 글 리스트
 
     Returns:
-        length_info (dict): 평균/최소/최대 길이 정보
+        length_info (ProfileLengthInfo): 평균/최소/최대 길이 정보
     """
     lengths = [len(t) for t in example_texts if t.strip()]
     if not lengths:
@@ -131,11 +131,30 @@ def estimate_target_length(example_texts: List[str]) -> dict:
     avg = int(sum(lengths) / len(lengths))
     min_chars = max(1000, int(avg * 0.95))
     max_chars = int(avg * 1.30)
-    return {
-        "avg_chars": avg,
-        "min_chars": min_chars,
-        "max_chars": max_chars,
-    }
+    return ProfileLengthInfo(avg_chars=avg, min_chars=min_chars, max_chars=max_chars)
+
+HEADER_RE = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
+def define_head_info(example_texts: List[str]) -> List[ProfileHeadInfo]:
+    """예시 글을 기반으로 헤더 정보를 정의하는 함수
+
+    Args:
+        example_texts (List[str]): 예시 글 리스트
+
+    Returns:
+        results (List[ProfileHeadInfo]): 헤더 정보 리스트
+    """
+    results = []
+    seen = set()
+    for text in example_texts:
+        for m in HEADER_RE.finditer(text):
+            level = len(m.group(1))
+            title = m.group(2).strip()
+            key = (level, title)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(ProfileHeadInfo(level=f"H{level}", title=title))
+    return results
 
 
 def build_or_load_vectorstore(
@@ -248,7 +267,7 @@ expand_prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "너는 한국어 글 편집자다. 아래 글의 **내용을 바꾸지 않고**, 같은 톤/스타일로 세부 설명과 예시를 보강해 "
+            "너는 한국어 글 편집자다. 아래 글의 **내용은 절대 바꾸지 않고**, 같은 톤/스타일로 세부 설명과 예시를 보강해라"
             "길이를 {target_min}자 이상 {target_max}자 이하로 확장하라. Markdown 헤더 구조는 유지하라.",
         ),
         ("human", "원문:\n{original}\n"),
