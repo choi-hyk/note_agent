@@ -43,3 +43,30 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 pip install --no-cache-dir "pydantic==2.9.2" "fastapi==0.112.2" "starlette==0.38.2" "langserve==0.3.1" "sse-starlette>=2.0.0"
 
 ```
+
+## 4) vscode launch.json
+
+```
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(FastAPI) Note Agent",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "server:app",
+                "--reload",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000",
+                "--log-level",
+                "debug"
+            ],
+            "justMyCode": true
+        }
+    ]
+}
+```
