@@ -1,66 +1,160 @@
 import os
-import json
 import uuid
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
+
+from sqlalchemy import (
+    create_engine,
+    String,
+    Integer,
+    DateTime,
+    Text,
+    JSON,
+    ForeignKey,
+    select,
+    func,
+)
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    sessionmaker,
+    relationship,
+)
+from sqlalchemy.exc import IntegrityError
 
 from .core import (
     build_or_load_vectorstore,
     summarize_style_rules,
     estimate_target_length,
+    define_head_info,
     build_completion_chain,
     expand_to_min_length,
     LLM_MODEL,
 )
 
-from .model import ProfileMeta
+from .model import ProfileMeta, ProfileLengthInfo, ProfileHeadInfo
 
-BASE_DIR = os.getenv("PROFILES_DIR") or "./profiels"
-
-
-def _profile_dir(profile_id: str) -> str:
-    return os.path.join(BASE_DIR, profile_id)
-
-
-def _examples_dir(profile_id: str) -> str:
-    return os.path.join(_profile_dir(profile_id), "examples")
+# ============================================================
+# SQLite 설정
+# ============================================================
+DB_URL = os.getenv("DB_URL", "sqlite:///./note_agent.db")
+engine = create_engine(DB_URL, future=True, echo=False)
+SessionLocal = sessionmaker(
+    bind=engine, expire_on_commit=False, autoflush=False, future=True
+)
 
 
 def _persist_dir(profile_id: str) -> str:
-    return os.path.join(_profile_dir(profile_id), "rag_store")
+    base = os.getenv("RAG_BASE_DIR", "./rag_store")
+    return os.path.join(base, profile_id)
 
 
-def _meta_path(profile_id: str) -> str:
-    return os.path.join(_profile_dir(profile_id), "profile.json")
+# ============================================================
+# ORM 모델
+# ============================================================
+class Base(DeclarativeBase):
+    pass
 
 
-def create_profile(name: str) -> ProfileMeta:
+class ProfileORM(Base):
+    __tablename__ = "profiles"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    style_rules: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    length_info: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True
+    )  # ProfileLengthInfo.dict()
+    head_info: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True
+    )  # [ProfileHeadInfo.dict(), ...]
+
+    persist_dir: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    examples_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    examples: Mapped[List["ProfileExampleORM"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+
+
+class ProfileExampleORM(Base):
+    __tablename__ = "profile_examples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    profile: Mapped[ProfileORM] = relationship(back_populates="examples")
+
+
+Base.metadata.create_all(bind=engine)
+
+
+# ============================================================
+# 변환기 (ORM → Pydantic)
+# ============================================================
+def _orm_to_meta(p: ProfileORM) -> ProfileMeta:
+    return ProfileMeta(
+        profile_id=p.id,
+        name=p.name,
+        description=p.description or "",
+        created_at=p.created_at.isoformat(),
+        style_rules=p.style_rules,
+        length_info=ProfileLengthInfo(**p.length_info) if p.length_info else None,
+        head_info=(
+            [ProfileHeadInfo(**h) for h in (p.head_info or [])] if p.head_info else None
+        ),
+        persist_dir=p.persist_dir,
+        examples_count=p.examples_count,
+    )
+
+
+def create_profile(
+    name: str, description: str, head_info: Optional[List[ProfileHeadInfo]]
+) -> ProfileMeta:
     """프로필을 생성하는 함수
 
     Args:
-        name: 프로필 이름
+        name (str): 프로필 이름
+        description (str): 프로필 설명
+        head_info (Optional[List[ProfileHeadInfo]]): 헤더 정보
 
     Returns:
         ProfileMeta: 생성된 프로필 메타데이터
     """
-    os.makedirs(BASE_DIR, exist_ok=True)
     profile_id = str(uuid.uuid4())
-    pdir = _profile_dir(profile_id)
-    os.makedirs(pdir, exist_ok=True)
-    os.makedirs(_examples_dir(profile_id), exist_ok=True)
+    persist_dir = _persist_dir(profile_id)
 
-    meta = ProfileMeta(
-        profile_id=profile_id,
-        name=name,
-        created_at=datetime.now().isoformat(),
-        style_rules=None,
-        length_info=None,
-        persist_dir=_persist_dir(profile_id),
-        examples_count=0,
+    head_info_json = (
+        [h.model_dump() if hasattr(h, "model_dump") else dict(h) for h in head_info]
+        if head_info
+        else None
     )
-    with open(_meta_path(profile_id), "w", encoding="utf-8") as f:
-        json.dump(meta.model_dump(), f, ensure_ascii=False, indent=2)
-    return meta
+    try:
+        with SessionLocal.begin() as s:
+            p = ProfileORM(
+                id=profile_id,
+                name=name,
+                description=description,
+                head_info=head_info_json,
+                persist_dir=persist_dir,
+            )
+            s.add(p)
+    except IntegrityError as e:
+        raise ValueError(f"프로필 이름이 중복되었습니다: {name}") from e
+
+    os.makedirs(persist_dir, exist_ok=True)
+
+    with SessionLocal() as s:
+        p = s.get(ProfileORM, profile_id)
+        return _orm_to_meta(p)
 
 
 def load_profile(profile_id: str) -> ProfileMeta:
@@ -73,8 +167,11 @@ def load_profile(profile_id: str) -> ProfileMeta:
     Returns:
         ProfileMeta: 프로필 메타데이터
     """
-    with open(_meta_path(profile_id), "r", encoding="utf-8") as f:
-        return ProfileMeta(**json.load(f))
+    with SessionLocal() as s:
+        p = s.get(ProfileORM, profile_id)
+        if not p:
+            raise FileNotFoundError("프로필을 찾지 못했습니다.")
+        return _orm_to_meta(p)
 
 
 def list_profiles() -> List[ProfileMeta]:
@@ -83,15 +180,11 @@ def list_profiles() -> List[ProfileMeta]:
     Returns:
         metas (List[ProfileMeta]): 프로필 메타데이터 리스트
     """
-    if not os.path.isdir(BASE_DIR):
-        return []
-    metas = []
-    for pid in os.listdir(BASE_DIR):
-        mpath = _meta_path(pid)
-        if os.path.isfile(mpath):
-            with open(mpath, "r", encoding="utf-8") as f:
-                metas.append(ProfileMeta(**json.load(f)))
-    return metas
+    with SessionLocal() as s:
+        rows = s.scalars(
+            select(ProfileORM).order_by(ProfileORM.created_at.desc())
+        ).all()
+        return [_orm_to_meta(p) for p in rows]
 
 
 def add_examples(profile_id: str, texts: List[str]) -> ProfileMeta:
@@ -104,24 +197,31 @@ def add_examples(profile_id: str, texts: List[str]) -> ProfileMeta:
     Returns:
         metas (ProfileMeta): 업데이트된 프로필 메타데이터
     """
-    ex_dir = _examples_dir(profile_id)
-    os.makedirs(ex_dir, exist_ok=True)
-    existing = len([p for p in os.listdir(ex_dir) if p.endswith((".txt", ".md"))])
-    for i, t in enumerate(texts, start=1):
-        path = os.path.join(ex_dir, f"example_{existing + i}.md")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(t.strip())
+    clean_texts = [t.strip() for t in texts if t and t.strip()]
+    if not clean_texts:
+        return load_profile(profile_id)
 
-    meta = load_profile(profile_id)
-    meta.examples_count = len(
-        [p for p in os.listdir(ex_dir) if p.endswith((".txt", ".md"))]
-    )
-    with open(_meta_path(profile_id), "w", encoding="utf-8") as f:
-        json.dump(meta.model_dump(), f, ensure_ascii=False, indent=2)
-    return meta
+    with SessionLocal.begin() as s:
+        p = s.get(ProfileORM, profile_id)
+        if not p:
+            raise FileNotFoundError("Profile not found")
+
+        for t in clean_texts:
+            s.add(ProfileExampleORM(profile_id=profile_id, content=t))
+
+        cnt = s.scalar(
+            select(func.count())
+            .select_from(ProfileExampleORM)
+            .where(ProfileExampleORM.profile_id == profile_id)
+        )
+        p.examples_count = int(cnt or 0)
+        s.add(p)
+        s.flush()
+
+        return _orm_to_meta(p)
 
 
-def _load_examples_from_disk(profile_id: str) -> List[str]:
+def _load_examples_from_db(profile_id: str) -> List[str]:
     """디스크에서 예시글을 로드하는 함수
 
     Args:
@@ -130,17 +230,13 @@ def _load_examples_from_disk(profile_id: str) -> List[str]:
     Returns:
         texts (List[str]): 예시 텍스트 리스트
     """
-    ex_dir = _examples_dir(profile_id)
-    if not os.path.isdir(ex_dir):
-        return []
-    texts = []
-    for fname in sorted(os.listdir(ex_dir)):
-        if fname.endswith((".txt", ".md")):
-            with open(os.path.join(ex_dir, fname), "r", encoding="utf-8") as f:
-                t = f.read().strip()
-                if t:
-                    texts.append(t)
-    return texts
+    with SessionLocal() as s:
+        rows = s.scalars(
+            select(ProfileExampleORM)
+            .where(ProfileExampleORM.profile_id == profile_id)
+            .order_by(ProfileExampleORM.created_at.asc(), ProfileExampleORM.id.asc())
+        ).all()
+        return [r.content for r in rows]
 
 
 def train_profile(profile_id: str) -> ProfileMeta:
@@ -152,22 +248,31 @@ def train_profile(profile_id: str) -> ProfileMeta:
     Returns:
         ProfileMeta: 업데이트된 프로필 메타데이터
     """
-    meta = load_profile(profile_id)
-    examples = _load_examples_from_disk(profile_id)
-    if len(examples) < 1:
-        raise ValueError("예시글이 최소 1개 이상 필요합니다. 먼저 업로드하세요.")
+    with SessionLocal.begin() as s:
+        p = s.get(ProfileORM, profile_id)
+        if not p:
+            raise FileNotFoundError("Profile not found")
 
-    os.makedirs(meta.persist_dir, exist_ok=True)
-    _ = build_or_load_vectorstore(example_texts=examples, persist_dir=meta.persist_dir)
+        examples = _load_examples_from_db(profile_id)
+        if len(examples) < 1:
+            raise ValueError("예시글이 최소 1개 이상 필요합니다. 먼저 업로드하세요.")
+        os.makedirs(p.persist_dir or _persist_dir(profile_id), exist_ok=True)
+        build_or_load_vectorstore(example_texts=examples, persist_dir=p.persist_dir)
 
-    style_rules = summarize_style_rules(examples)
-    length_info = estimate_target_length(examples)
+        style_rules = summarize_style_rules(examples)
+        length_info = estimate_target_length(examples)
 
-    meta.style_rules = style_rules
-    meta.length_info = length_info
-    with open(_meta_path(profile_id), "w", encoding="utf-8") as f:
-        json.dump(meta.model_dump(), f, ensure_ascii=False, indent=2)
-    return meta
+        if not p.head_info:
+            computed = define_head_info(examples)
+            p.head_info = [h.model_dump() for h in computed]
+
+        p.style_rules = style_rules
+        p.length_info = length_info.model_dump()
+
+        s.add(p)
+        s.flush()
+
+        return _orm_to_meta(p)
 
 
 def complete_with_profile(

@@ -1,7 +1,6 @@
-import os
-from typing import Dict, Any
+from typing import Dict, Any, List, Any, Optional, Union
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from langserve import add_routes
 
 from note_agent.profiles import (
@@ -14,7 +13,6 @@ from note_agent.profiles import (
 )
 
 from note_agent.model import (
-    AddExamplesReq,
     CompleteReq,
     CreateProfileReq,
 )
@@ -99,7 +97,7 @@ def api_create_profile(req: CreateProfileReq):
     Returns:
         meta (Dict[str, Any]): 생성된 프로필 메타데이터
     """
-    meta = create_profile(req.name)
+    meta = create_profile(req.name, req.description, req.head_info)
     return {"profile": meta.model_dump()}
 
 
@@ -145,6 +143,31 @@ def api_get_profile(profile_id: str):
     return {"profile": meta.model_dump()}
 
 
+ALLOWED_EXTS = {".txt", ".md"}
+MAX_SIZE = 2 * 1024 * 1024
+
+
+def _safe_read_text(file: UploadFile) -> Optional[str]:
+    import os
+
+    _, ext = os.path.splitext(file.filename or "")
+    ext = ext.lower()
+    if ext not in ALLOWED_EXTS:
+        return None
+    data = file.file.read(MAX_SIZE + 1)
+    if len(data) > MAX_SIZE:
+        return None
+    return data.decode("utf-8", errors="ignore").strip() or None
+
+
+def _to_list(x):
+    if x is None:
+        return []
+    if isinstance(x, (list, tuple)):
+        return [i for i in x if i not in ("", None)]
+    return [x] if x != "" else []
+
+
 @app.post(
     "/profiles/{profile_id}/examples",
     tags=["Profiles"],
@@ -154,7 +177,13 @@ def api_get_profile(profile_id: str):
     response_description="업데이트된 프로필 메타데이터",
     operation_id="add_examples",
 )
-def api_add_examples(profile_id: str, req: AddExamplesReq):
+async def api_add_examples(
+    profile_id: str,
+    texts: Optional[Union[List[str], str]] = Form(
+        None, description="예시 텍스트(여러 개 가능)"
+    ),
+    files: Optional[Union[List[UploadFile], UploadFile]] = None,
+):
     """프로필에 예시 텍스트 추가
 
     Args:
@@ -164,10 +193,24 @@ def api_add_examples(profile_id: str, req: AddExamplesReq):
         meta (Dict[str, Any]): 업데이트된 프로필 메타데이터
     """
     try:
-        meta = add_examples(profile_id, req.texts)
+        collected: List[str] = []
+        texts_list: List[str] = [t.strip() for t in _to_list(texts) if t and t.strip()]
+        files_list: List[UploadFile] = _to_list(files)
+        if texts_list:
+            collected += [t.strip() for t in texts_list if t and t.strip()]
+        if files_list:
+            for f in files_list:
+                content = _safe_read_text(f)
+                if content:
+                    collected.append(content)
+        if not collected:
+            raise HTTPException(
+                status_code=400, detail="추가할 예시 텍스트가 없습니다."
+            )
+        meta = add_examples(profile_id, collected)
+        return {"profile": meta.model_dump()}
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return {"profile": meta.model_dump()}
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
 
 
 @app.post(
@@ -190,7 +233,7 @@ def api_train_profile(profile_id: str):
     try:
         meta = train_profile(profile_id)
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"profile": meta.model_dump()}
@@ -225,7 +268,7 @@ def api_complete_with_profile(profile_id: str, req: CompleteReq) -> Dict[str, An
             retriever_k=req.retriever_k,
         )
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"output": out}

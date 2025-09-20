@@ -53,7 +53,7 @@ class ProfileMeta(BaseModel):
     description: str
     created_at: str
     style_rules: Optional[str] = None
-    length_info: ProfileLengthInfo = None
+    length_info: Optional[ProfileLengthInfo] = None
     head_info: Optional[List[ProfileHeadInfo]] = None
     persist_dir: Optional[str] = None
     examples_count: int = 0
@@ -72,16 +72,6 @@ class CreateProfileReq(BaseModel):
     name: str
     description: str
     head_info: Optional[List[ProfileHeadInfo]] = None
-
-
-class AddExamplesReq(BaseModel):
-    """프로필에 예시 텍스트 추가
-
-    Attributes:
-        texts (List[str]): 예시 텍스트 목록
-    """
-
-    texts: List[str]
 
 
 class CompleteReq(BaseModel):
