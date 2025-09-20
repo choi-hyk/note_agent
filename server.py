@@ -1,8 +1,7 @@
 import os
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from langserve import add_routes
 
 from note_agent.profiles import (
@@ -14,10 +13,26 @@ from note_agent.profiles import (
     load_profile,
 )
 
-from note_agent.model import ProfileHeadInfo
+from note_agent.model import (
+    AddExamplesReq,
+    CompleteReq,
+    CreateProfileReq,
+)
 
-app = FastAPI(title="Note Agent Service", debug=True)
+app = FastAPI(
+    title="Note Agent Service",
+    descriptiopn="프로필을 기반으로 글을 완성시켜주는 Agent.",
+    debug=True,
+    openapi_tags=[
+        {"name": "Profiles", "description": "프로필 생성/관리/완성 기능"},
+        {"name": "NoteAgent", "description": "체인/에이전트 데모 엔드포인트"},
+    ],
+)
 
+
+# ------------------------------
+# LangServe note-agent 데모
+# ------------------------------
 def make_note_agent():
     """Runnable 에이전트 팩토리(공용 데모).
     - core의 구성요소로 runnable 체인을 만들어 LangServe에 바로 노출하기 위한 간단 헬퍼
@@ -64,41 +79,16 @@ agent = make_note_agent()
 add_routes(app, agent, path="/note-agent")
 
 
-class CreateProfileReq(BaseModel):
-    """프로필 생성 요청
-
-    Attributes:
-        name (str): 프로필 이름
-    """
-
-    name: str
-    description: str
-    head_info: Optional[List[ProfileHeadInfo]] = None
-
-
-class AddExamplesReq(BaseModel):
-    """프로필에 예시 텍스트 추가
-
-    Attributes:
-        texts (List[str]): 예시 텍스트 목록
-    """
-
-    texts: List[str]
-
-
-class CompleteReq(BaseModel):
-    """프로필을 적용하여 완성글 요청
-
-    Attributes:
-        user_draft (str): 사용자 초안
-        retriever_k (int): 검색할 문서 수
-    """
-
-    user_draft: str
-    retriever_k: int = 3
-
-
-@app.post("/profiles", response_model=Dict[str, Any])
+# ------------------------------
+# Profiles (메타데이터 방식)
+# ------------------------------
+@app.post(
+    "/profiles",
+    tags=["Profiles"],
+    summary="새 프로필 생성",
+    response_model=Dict[str, Any],
+    response_description="생성된 프로필 메타데이터를 반환합니다.",
+)
 def api_create_profile(req: CreateProfileReq):
     """새 프로필 생성
     - 프로필 이름은 고유해야 함
@@ -113,7 +103,14 @@ def api_create_profile(req: CreateProfileReq):
     return {"profile": meta.model_dump()}
 
 
-@app.get("/profiles", response_model=Dict[str, Any])
+@app.get(
+    "/profiles",
+    tags=["Profiles"],
+    summary="모든 프로필 조회",
+    description="저장된 모든 프로필의 메타데이터를 조회합니다.",
+    response_model=Dict[str, Any],
+    response_description="프로필 메타데이터 리스트",
+)
 def api_list_profiles():
     """모든 프로필 메타데이터 조회
 
@@ -124,7 +121,14 @@ def api_list_profiles():
     return {"profiles": metas}
 
 
-@app.get("/profiles/{profile_id}", response_model=Dict[str, Any])
+@app.get(
+    "/profiles/{profile_id}",
+    tags=["Profiles"],
+    summary="특정 프로필 조회",
+    description="**profile_id** 에 해당하는 프로필 메타데이터를 조회합니다.",
+    response_model=Dict[str, Any],
+    response_description="프로필 메타데이터",
+)
 def api_get_profile(profile_id: str):
     """특정 프로필 메타데이터 조회
 
@@ -141,7 +145,15 @@ def api_get_profile(profile_id: str):
     return {"profile": meta.model_dump()}
 
 
-@app.post("/profiles/{profile_id}/examples", response_model=Dict[str, Any])
+@app.post(
+    "/profiles/{profile_id}/examples",
+    tags=["Profiles"],
+    summary="프로필에 예시 텍스트 추가",
+    description="지정한 **profile_id** 의 프로필에 예시 텍스트들을 추가합니다.",
+    response_model=Dict[str, Any],
+    response_description="업데이트된 프로필 메타데이터",
+    operation_id="add_examples",
+)
 def api_add_examples(profile_id: str, req: AddExamplesReq):
     """프로필에 예시 텍스트 추가
 
@@ -158,7 +170,14 @@ def api_add_examples(profile_id: str, req: AddExamplesReq):
     return {"profile": meta.model_dump()}
 
 
-@app.post("/profiles/{profile_id}/train", response_model=Dict[str, Any])
+@app.post(
+    "/profiles/{profile_id}/train",
+    tags=["Profiles"],
+    summary="프로필 학습 수행",
+    description="프로필 메타데이터와 예시를 바탕으로 학습을 수행합니다.",
+    response_model=Dict[str, Any],
+    response_description="업데이트된 프로필 메타데이터",
+)
 def api_train_profile(profile_id: str):
     """프로필의 메타 데이터로 학습
 
@@ -177,7 +196,18 @@ def api_train_profile(profile_id: str):
     return {"profile": meta.model_dump()}
 
 
-@app.post("/profiles/{profile_id}/complete", response_model=Dict[str, Any])
+@app.post(
+    "/profiles/{profile_id}/complete",
+    tags=["Profiles"],
+    summary="프로필 스타일을 적용해 완성 글 생성",
+    description=(
+        "지정한 **profile_id** 의 스타일을 적용하여 초안을 보완/완성합니다.\n"
+        "- `user_draft`: 사용자 초안 텍스트\n"
+        "- `retriever_k`: 검색 문서 수"
+    ),
+    response_model=Dict[str, Any],
+    response_description="완성 결과",
+)
 def api_complete_with_profile(profile_id: str, req: CompleteReq) -> Dict[str, Any]:
     """프로필 스타일을 적용 완성글 생성
 

@@ -1,9 +1,8 @@
 import os
 import json
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
 
 from .core import (
     build_or_load_vectorstore,
@@ -14,30 +13,9 @@ from .core import (
     LLM_MODEL,
 )
 
-BASE_DIR = os.getenv("PROFILES_DIR", "./profiles")
+from .model import ProfileMeta
 
-
-class ProfileMeta(BaseModel):
-    """
-    프로필 메타데이터
-
-    Attributes:
-        profile_id (str): 프로필 ID
-        name (str): 프로필 이름
-        created_at (str): 생성 일시(ISO 포맷)
-        style_rules (Optional[str]): 요약된 스타일 규칙
-        length_info (Optional[Dict[str, int]]): 길이 정보(최소/최대 문자 수)
-        persist_dir (Optional[str]): 벡터스토어 영속화 디렉토리
-        examples_count (int): 저장된 예시글 수
-    """
-
-    profile_id: str
-    name: str
-    created_at: str
-    style_rules: Optional[str] = None
-    length_info: Optional[Dict[str, int]] = None
-    persist_dir: Optional[str] = None
-    examples_count: int = 0
+BASE_DIR = os.getenv("PROFILES_DIR") or "./profiels"
 
 
 def _profile_dir(profile_id: str) -> str:

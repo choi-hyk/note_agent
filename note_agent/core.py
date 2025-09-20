@@ -5,9 +5,8 @@ import json
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
 
-from .model import ProfileHeadInfo, ProfileLengthInfo
+from .model import ProfileHeadInfo, ProfileLengthInfo, CompletionOutput
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -19,8 +18,6 @@ from langchain.schema.runnable import RunnablePassthrough
 # =========================================
 # Environment & Constants
 # =========================================
-
-
 load_dotenv()
 assert os.getenv(
     "OPENAI_API_KEY"
@@ -39,50 +36,15 @@ RETRIEVE_K = int(os.getenv("RETRIEVE_K") or "3")
 TEMPL_COMPLETE = float(os.getenv("TEMPL_COMPLETE") or "0.2")
 TEMP_SUMMARY = float(os.getenv("TEMP_SUMMARY") or "0.3")
 
+
 def _ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+
 _ensure_dir(PERSIST_DIR)
 _ensure_dir(EXAMPLE_DIR)
 _ensure_dir(RESULTS_DIR)
-
-# =========================================
-# Schemas
-# =========================================
-
-class ChangeLog(BaseModel):
-    """변경 사항 로그
-
-    Attributes:
-        fixes: 맞춤법/띄어쓰기 등 교정 사항
-        additions: 자연스러운 흐름을 위한 추가 문장/단락
-        factual_issues: 사실관계 오류 또는 오해 소지가 있는 부분
-    """
-
-    fixes: List[str] = Field(
-        default_factory=list, description="맞춤법/띄어쓰기 등 교정 사항"
-    )
-    additions: List[str] = Field(
-        default_factory=list, description="자연스러운 흐름을 위한 추가 문장/단락"
-    )
-    factual_issues: List[str] = Field(
-        default_factory=list, description="사실관계 오류 또는 오해 소지가 있는 부분"
-    )
-
-
-class CompletionOutput(BaseModel):
-    """완성된 글의 구조화된 출력
-
-    Attributes:
-        toc: 생성된 목차(상위 헤딩 순서)
-        completed_text: 목차 순서대로 전개된 최종 본문
-        change_log: 교정/추가/사실오류 여부를 구조화된 변경 로그로 제공
-    """
-
-    toc: List[str] = Field(default_factory=list, description="H1~H4 목차")
-    completed_text: str
-    change_log: ChangeLog
 
 
 # =========================================
@@ -133,7 +95,10 @@ def estimate_target_length(example_texts: List[str]) -> ProfileLengthInfo:
     max_chars = int(avg * 1.30)
     return ProfileLengthInfo(avg_chars=avg, min_chars=min_chars, max_chars=max_chars)
 
-HEADER_RE = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
+
+HEADER_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
+
+
 def define_head_info(example_texts: List[str]) -> List[ProfileHeadInfo]:
     """예시 글을 기반으로 헤더 정보를 정의하는 함수
 
