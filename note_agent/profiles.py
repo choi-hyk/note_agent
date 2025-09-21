@@ -1,9 +1,11 @@
 import os
 import uuid
-from typing import List, Dict, Any, Optional
+import shutil
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from sqlalchemy import (
+    Tuple,
     create_engine,
     String,
     Integer,
@@ -33,7 +35,7 @@ from .core import (
     LLM_MODEL,
 )
 
-from .model import ProfileMeta, ProfileLengthInfo, ProfileHeadInfo
+from .model import NoteAgentOutput, ProfileMeta, ProfileLengthInfo, ProfileHeadInfo
 
 # ============================================================
 # SQLite 설정
@@ -156,6 +158,91 @@ def create_profile(
         p = s.get(ProfileORM, profile_id)
         return _orm_to_meta(p)
 
+def update_profile(
+    profile_id: str,
+    *,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    head_info: Optional[List[ProfileHeadInfo]] = None,
+) -> ProfileMeta:
+    """
+    프로필 메타데이터 부분 수정(Partial Update)
+
+    Args:
+        profile_id: 수정할 프로필 ID
+        name: (선택) 새 이름. 고유 제약(UNIQUE) 위반 시 ValueError 발생
+        description: (선택) 새 설명
+        head_info: (선택) 새 헤더 정보 리스트. None이면 변경 안 함
+
+    Returns:
+        ProfileMeta: 수정된 프로필 메타데이터
+
+    Raises:
+        FileNotFoundError: 프로필이 존재하지 않을 때
+        ValueError: 이름 중복 등 제약 위반
+    """
+    with SessionLocal.begin() as s:
+        p = s.get(ProfileORM, profile_id)
+        if not p:
+            raise FileNotFoundError("Profile not found")
+
+        if name is not None and name != p.name:
+            p.name = name 
+        if description is not None:
+            p.description = description
+        if head_info is not None:
+            p.head_info = [
+                (h.model_dump() if hasattr(h, "model_dump") else dict(h))
+                for h in head_info
+            ]
+
+        try:
+            s.add(p)
+            s.flush()
+        except IntegrityError as e:
+            raise ValueError(f"프로필 이름이 중복되었습니다: {name}") from e
+
+        return _orm_to_meta(p)
+
+
+def delete_profile(
+    profile_id: str,
+    *,
+    drop_vectorstore: bool = True,
+) -> bool:
+    """
+    프로필 삭제(예시 포함 캐스케이드). 필요 시 벡터스토어 디렉토리도 삭제.
+
+    Args:
+        profile_id: 삭제할 프로필 ID
+        drop_vectorstore: True면 persist_dir(Chroma 등)까지 제거
+
+    Returns:
+        bool: 실제로 삭제되면 True, 아니면 False
+
+    Raises:
+        None (존재하지 않으면 False 반환)
+    """
+    persist_dir: Optional[str] = None
+    with SessionLocal() as s:
+        p = s.get(ProfileORM, profile_id)
+        if not p:
+            return False
+        persist_dir = p.persist_dir
+
+    with SessionLocal.begin() as s:
+        p = s.get(ProfileORM, profile_id)
+        if not p:
+            return False
+        s.delete(p)
+
+    if drop_vectorstore and persist_dir:
+        try:
+            shutil.rmtree(persist_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return True
 
 def load_profile(profile_id: str) -> ProfileMeta:
     """
@@ -280,55 +367,62 @@ def complete_with_profile(
     user_draft: str,
     *,
     retriever_k: int = 3,
-) -> Dict[str, Any]:
+    cache: Optional[Dict[str, Any]] = None
+) -> NoteAgentOutput:
     """프로필 스타일로 글 완성(TOC/본문/변경로그 반환)
 
     Args:
         profile_id: 프로필 ID
         user_draft: 사용자가 작성한 초안
         retriever_k: RAG 검색 시 상위 k개 문서 활용(기본 3)
+        cache: 프로필 에이전트 캐시
 
     Returns:
         out (Dict[str, Any]): 완성 결과
     """
-    meta = load_profile(profile_id)
-    if not (meta.style_rules and meta.length_info and meta.persist_dir):
-        raise ValueError(
-            "해당 프로필은 아직 학습되지 않았습니다. /profiles/{id}/train 을 먼저 호출하세요."
+    chain = None
+    meta = None
+    if cache is not None:
+        packed = cache.get(profile_id)
+        if packed:
+            chain, meta = packed
+
+    if meta is None:
+        meta = load_profile(profile_id)
+        if not (meta.style_rules and meta.length_info and meta.persist_dir):
+            train_profile(profile_id)
+            meta = load_profile(profile_id)
+
+    if chain is None:
+        from langchain_openai import OpenAIEmbeddings
+        from langchain_chroma import Chroma
+        embeddings = OpenAIEmbeddings()
+        vs = Chroma(embedding_function=embeddings, persist_directory=meta.persist_dir)
+        chain = build_completion_chain(
+            style_rules=meta.style_rules,
+            vs=vs,
+            length_info=meta.length_info,
+            retriever_k=retriever_k,
         )
+        if cache is not None:
+            cache[profile_id] = (chain, meta)
 
-    # 프로필 전용 벡터스토어 로드
-    from langchain_openai import OpenAIEmbeddings
-    from langchain_chroma import Chroma
-
-    embeddings = OpenAIEmbeddings()
-    vs = Chroma(embedding_function=embeddings, persist_directory=meta.persist_dir)
-
-    # 체인 구성 및 실행
-    chain = build_completion_chain(
-        style_rules=meta.style_rules,
-        vs=vs,
-        length_info=meta.length_info,
-        retriever_k=retriever_k,
-    )
     result = chain.invoke(user_draft)
 
-    # 길이 보정
-    if len(result.completed_text) < meta.length_info["min_chars"]:
+    if len(result.completed_text) < meta.length_info.min_chars:
         expanded = expand_to_min_length(
             text=result.completed_text,
-            target_min=meta.length_info["min_chars"],
-            target_max=meta.length_info["max_chars"],
+            target_min=meta.length_info.min_chars,
+            target_max=meta.length_info.max_chars,
             model=LLM_MODEL,
         )
         result.completed_text = expanded
         result.change_log.additions.append(
-            f"최소 분량 미달로 사후 확장 수행(→ ≥{meta.length_info['min_chars']}자)"
+            f"최소 분량 미달로 사후 확장 수행(→ ≥{meta.length_info.min_chars}자)"
         )
 
-    return {
-        "toc": result.toc,
-        "completed_text": result.completed_text,
-        "change_log": result.change_log.model_dump(),
-        "profile_id": profile_id,
-    }
+    return NoteAgentOutput(
+        toc=result.toc,
+        completed_text=result.completed_text,
+        change_log=result.change_log,
+    )

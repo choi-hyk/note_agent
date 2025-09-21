@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -59,9 +59,6 @@ class ProfileMeta(BaseModel):
     examples_count: int = 0
 
 
-# ------------------------------
-# Request / Response Models
-# ------------------------------
 class CreateProfileReq(BaseModel):
     """프로필 생성 요청
 
@@ -73,6 +70,10 @@ class CreateProfileReq(BaseModel):
     description: str
     head_info: Optional[List[ProfileHeadInfo]] = None
 
+class UpdateProfileReq(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    head_info: Optional[List[ProfileHeadInfo]] = None
 
 class CompleteReq(BaseModel):
     """프로필을 적용하여 완성글 요청
@@ -109,7 +110,13 @@ class ChangeLog(BaseModel):
     )
 
 
-class CompletionOutput(BaseModel):
+class NoteAgentInput(BaseModel):
+    profile_id: str = Field(..., description="프로필 ID")
+    user_draft: str = Field(..., description="사용자 초안 텍스트")
+    retriever_k: Optional[int] = Field(3, ge=1, description="RAG 검색 문서 수")
+
+
+class NoteAgentOutput(BaseModel):
     """완성된 글의 구조화된 출력
 
     Attributes:

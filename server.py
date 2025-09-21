@@ -1,10 +1,15 @@
 from typing import Dict, Any, List, Any, Optional, Union
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from langserve import add_routes
+from langchain_core.runnables import Runnable
 
 from note_agent.profiles import (
     create_profile,
+    update_profile,
+    delete_profile,
     list_profiles,
     add_examples,
     train_profile,
@@ -15,71 +20,117 @@ from note_agent.profiles import (
 from note_agent.model import (
     CompleteReq,
     CreateProfileReq,
+    NoteAgentInput,
+    NoteAgentOutput,
+    UpdateProfileReq
 )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.profile_agents = {} 
+    yield
+    app.state.profile_agents.clear()
 
 app = FastAPI(
     title="Note Agent Service",
-    descriptiopn="프로필을 기반으로 글을 완성시켜주는 Agent.",
+    description="프로필을 기반으로 글을 완성시켜주는 Agent.",
     debug=True,
+    lifespan=lifespan,
     openapi_tags=[
-        {"name": "Profiles", "description": "프로필 생성/관리/완성 기능"},
-        {"name": "NoteAgent", "description": "체인/에이전트 데모 엔드포인트"},
+        {"name": "NoteAgent", "description": "프로필 기반 글 생성"},
+        {"name": "Profiles", "description": "프로필 생성/관리"},
     ],
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+)
 
 # ------------------------------
-# LangServe note-agent 데모
-# ------------------------------
-def make_note_agent():
-    """Runnable 에이전트 팩토리(공용 데모).
-    - core의 구성요소로 runnable 체인을 만들어 LangServe에 바로 노출하기 위한 간단 헬퍼
+# NoteAgent
+# -----------------------------
+def _ensure_profile_exists(profile_id: str):
+    try:
+        return load_profile(profile_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+
+def _ensure_profile_agent(profile_id: str):
+    cached = app.state.profile_agents.get(profile_id)
+    if cached:
+        return cached
+
+    def _run(user_draft: str, retriever_k: int | None):
+        return complete_with_profile(
+            profile_id=profile_id,
+            user_draft=user_draft,
+            retriever_k=retriever_k if retriever_k is not None else 3,
+            cache=cached
+        )
+
+    async def _arun(user_draft: str, retriever_k: int | None):
+        return _run(user_draft, retriever_k)
+
+    app.state.profile_agents[profile_id] = (_run, _arun)
+    return app.state.profile_agents[profile_id]
+
+class NoteAgent(Runnable):
     """
-    from note_agent.core import (
-        load_example_texts,
-        build_or_load_vectorstore,
-        summarize_style_rules,
-        estimate_target_length,
-        build_completion_chain,
-        expand_to_min_length,
-        EXAMPLE_DIR,
-        PERSIST_DIR,
-        RETRIEVE_K,
-        LLM_MODEL,
-    )
+    LangServe에 등록할 Runnable 구현.
+    - 입력(JSON): {"profile_id": "...", "user_draft": "...", "retriever_k": 3}
+    - 출력(JSON): complete_with_profile(...) 반환 dict
+    """
 
-    examples = load_example_texts(EXAMPLE_DIR)
-    vs = build_or_load_vectorstore(examples, PERSIST_DIR)
-    style_rules = summarize_style_rules(examples)
-    length_info = estimate_target_length(examples)
-    chain = build_completion_chain(style_rules, vs, length_info, retriever_k=RETRIEVE_K)
+    def invoke(self, input: dict, config=None):
+        if not isinstance(input, dict):
+            raise ValueError("input은 객체(JSON)여야 합니다.")
 
-    from langchain_core.runnables import RunnableLambda
+        profile_id = input.get("profile_id")
+        if not profile_id:
+            raise ValueError("profile_id는 필수입니다.")
 
-    def _post_process(result):
-        if len(result.completed_text) < length_info["min_chars"]:
-            expanded = expand_to_min_length(
-                text=result.completed_text,
-                target_min=length_info["min_chars"],
-                target_max=length_info["max_chars"],
-                model=LLM_MODEL,
-            )
-            result.completed_text = expanded
-            result.change_log.additions.append(
-                f"최소 분량 미달로 사후 확장 수행(→ ≥{length_info['min_chars']}자)"
-            )
-        return result
+        user_draft = input.get("user_draft") or ""
+        if not user_draft:
+            raise ValueError("user_draft는 필수입니다.")
 
-    return chain | RunnableLambda(_post_process)
+        retriever_k = input.get("retriever_k", 3)
+
+        _ensure_profile_exists(profile_id)
+
+        run, _ = _ensure_profile_agent(profile_id)
+        return run(user_draft=user_draft, retriever_k=retriever_k)
+
+    async def ainvoke(self, input: dict, config=None):
+        if not isinstance(input, dict):
+            raise ValueError("input은 객체(JSON)여야 합니다.")
+
+        profile_id = input.get("profile_id")
+        if not profile_id:
+            raise ValueError("profile_id는 필수입니다.")
+
+        user_draft = input.get("user_draft") or ""
+        if not user_draft:
+            raise ValueError("user_draft는 필수입니다.")
+
+        retriever_k = input.get("retriever_k", 3)
+
+        _ensure_profile_exists(profile_id)
+
+        _, arun = _ensure_profile_agent(profile_id)
+        return await arun(user_draft=user_draft, retriever_k=retriever_k)
+
+    def stream(self, input: dict, config=None):
+        yield self.invoke(input, config)
+
+note_agent = NoteAgent()
+add_routes(app, note_agent, path="/note-agent",     input_type=NoteAgentInput,
+    output_type=NoteAgentOutput,)
 
 
-agent = make_note_agent()
-add_routes(app, agent, path="/note-agent")
-
-
-# ------------------------------
-# Profiles (메타데이터 방식)
-# ------------------------------
+# ---------------------------
+# Profile routers
+# ---------------------------
 @app.post(
     "/profiles",
     tags=["Profiles"],
@@ -99,6 +150,44 @@ def api_create_profile(req: CreateProfileReq):
     """
     meta = create_profile(req.name, req.description, req.head_info)
     return {"profile": meta.model_dump()}
+
+@app.patch(
+    "/profiles/{profile_id}",
+    tags=["Profiles"],
+    summary="프로필 메타 업데이트(부분 수정)",
+    response_model=Dict[str, Any],
+)
+def api_update_profile(profile_id: str, req: UpdateProfileReq):
+    try:
+        meta = update_profile(
+            profile_id,
+            name=req.name,
+            description=req.description,
+            head_info=req.head_info,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if hasattr(app.state, "profile_agents"):
+        app.state.profile_agents.pop(profile_id, None)
+    return {"profile": meta.model_dump()}
+
+@app.delete(
+    "/profiles/{profile_id}",
+    tags=["Profiles"],
+    summary="프로필 삭제(예시/벡터스토어 포함)",
+    response_model=Dict[str, Any],
+)
+def api_delete_profile(profile_id: str, drop_vectorstore: bool = True):
+    ok = delete_profile(profile_id, drop_vectorstore=drop_vectorstore)
+    if not ok:
+        raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
+    # 캐시 무효화
+    if hasattr(app.state, "profile_agents"):
+        app.state.profile_agents.pop(profile_id, None)
+    return {"deleted": True}
 
 
 @app.get(
@@ -159,15 +248,6 @@ def _safe_read_text(file: UploadFile) -> Optional[str]:
         return None
     return data.decode("utf-8", errors="ignore").strip() or None
 
-
-def _to_list(x):
-    if x is None:
-        return []
-    if isinstance(x, (list, tuple)):
-        return [i for i in x if i not in ("", None)]
-    return [x] if x != "" else []
-
-
 @app.post(
     "/profiles/{profile_id}/examples",
     tags=["Profiles"],
@@ -179,10 +259,10 @@ def _to_list(x):
 )
 async def api_add_examples(
     profile_id: str,
-    texts: Optional[Union[List[str], str]] = Form(
+    texts: Optional[List[str]] = Form(
         None, description="예시 텍스트(여러 개 가능)"
     ),
-    files: Optional[Union[List[UploadFile], UploadFile]] = None,
+    files: Optional[List[UploadFile]] = File(None, description="예시 파일(한 개 이상 가능)")
 ):
     """프로필에 예시 텍스트 추가
 
@@ -194,20 +274,23 @@ async def api_add_examples(
     """
     try:
         collected: List[str] = []
-        texts_list: List[str] = [t.strip() for t in _to_list(texts) if t and t.strip()]
-        files_list: List[UploadFile] = _to_list(files)
+        texts_list: List[str] = [t.strip() for t in texts if t and t.strip()]
+        files_list: List[UploadFile] = files
         if texts_list:
             collected += [t.strip() for t in texts_list if t and t.strip()]
-        if files_list:
-            for f in files_list:
-                content = _safe_read_text(f)
-                if content:
-                    collected.append(content)
+        for f in files_list:
+            content = _safe_read_text(f)
+            if content:
+                collected.append(content)
         if not collected:
             raise HTTPException(
                 status_code=400, detail="추가할 예시 텍스트가 없습니다."
             )
         meta = add_examples(profile_id, collected)
+
+        if hasattr(app.state, "profile_agents"):
+            app.state.profile_agents.pop(profile_id, None)
+
         return {"profile": meta.model_dump()}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
@@ -251,7 +334,7 @@ def api_train_profile(profile_id: str):
     response_model=Dict[str, Any],
     response_description="완성 결과",
 )
-def api_complete_with_profile(profile_id: str, req: CompleteReq) -> Dict[str, Any]:
+def api_complete_with_profile(profile_id: str, req: CompleteReq, request: Request) -> Dict[str, Any]:
     """프로필 스타일을 적용 완성글 생성
 
     Args:
@@ -266,6 +349,7 @@ def api_complete_with_profile(profile_id: str, req: CompleteReq) -> Dict[str, An
             profile_id=profile_id,
             user_draft=req.user_draft,
             retriever_k=req.retriever_k,
+            cache=getattr(request.app.state, "profile_chain_cache", None),
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")

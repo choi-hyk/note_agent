@@ -1,12 +1,11 @@
 import os
 import re
-import glob
 import json
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 from dotenv import load_dotenv
 
-from .model import ProfileHeadInfo, ProfileLengthInfo, CompletionOutput
+from .model import ProfileHeadInfo, ProfileLengthInfo, NoteAgentOutput
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -24,7 +23,6 @@ assert os.getenv(
 ), "환경 변수 OPENAI_API_KEY 가 필요합니다 (.env 설정)."
 
 PERSIST_DIR = os.getenv("PERSIST_DIR") or "./rag_store"
-EXAMPLE_DIR = os.getenv("EXAMPLE_DIR") or "./examples"
 RESULTS_DIR = os.getenv("RESULTS_DIR") or "./results"
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
@@ -43,40 +41,11 @@ def _ensure_dir(path: str) -> str:
 
 
 _ensure_dir(PERSIST_DIR)
-_ensure_dir(EXAMPLE_DIR)
 _ensure_dir(RESULTS_DIR)
-
 
 # =========================================
 # Main Functions
 # =========================================
-def load_example_texts(path: str = EXAMPLE_DIR) -> List[str]:
-    """RAG용 예시글을 로드하는 함수
-
-    Args:
-        path (str, optional): 예시글 폴더 경로. Defaults to EXAMPLE_DIR
-
-    Returns:
-        text (List[str]): 로드된 예시글 리스트
-    """
-    allowed_exts = ("*.txt", "*.md")
-    paths = []
-    for ext in allowed_exts:
-        paths.extend(glob.glob(os.path.join(path, ext)))
-
-    if not paths:
-        raise FileNotFoundError(f"예시 글을 {EXAMPLE_DIR} 폴더에 넣어주세요.")
-
-    paths = sorted(paths)
-    texts = []
-
-    for path in paths:
-        with open(path, "r", encoding="utf-8") as f:
-            t = f.read().strip()
-            if t:
-                texts.append(t)
-    return texts
-
 
 def estimate_target_length(example_texts: List[str]) -> ProfileLengthInfo:
     """예시 글을 기반으로 길이를 추정하는 함수
@@ -160,7 +129,6 @@ def build_or_load_vectorstore(
         metadatas=metas,
         persist_directory=persist_dir,
     )
-    vs.persist()
     return vs
 
 
@@ -293,7 +261,7 @@ def build_completion_chain(
         return "\n\n---\n\n".join([d.page_content for d in docs])
 
     llm_structured = ChatOpenAI(model=model, temperature=temp).with_structured_output(
-        CompletionOutput
+        NoteAgentOutput
     )
 
     chain = (
@@ -301,9 +269,9 @@ def build_completion_chain(
             "context": retriever | format_docs,
             "user_input": RunnablePassthrough(),
             "style_rules": lambda _: style_rules,
-            "length_avg_chars": lambda _: length_info["avg_chars"],
-            "length_min_chars": lambda _: length_info["min_chars"],
-            "length_max_chars": lambda _: length_info["max_chars"],
+            "length_avg_chars": lambda _: length_info.avg_chars,
+            "length_min_chars": lambda _: length_info.min_chars,
+            "length_max_chars": lambda _: length_info.max_chars,
         }
         | prompt
         | llm_structured
@@ -313,7 +281,7 @@ def build_completion_chain(
 
 
 def save_result(
-    result: CompletionOutput, results_dir: str = RESULTS_DIR
+    result: NoteAgentOutput, results_dir: str = RESULTS_DIR
 ) -> Dict[str, str]:
     """결과를 마크다운과 JSON으로 저장하는 함수
 
@@ -337,108 +305,3 @@ def save_result(
 
     print(f"\n결과 저장 완료:\n- {md_path}\n- {json_path}")
     return {"completed_md": md_path, "change_log_json": json_path}
-
-
-# =========================================
-# Note Agent
-# =========================================
-class NoteAgent:
-    """
-    사용법:
-        agent = NoteAgent()
-        paths = agent.run("사용자 초안 텍스트")
-
-    LangSmith:
-        chain.invoke(..., config={"metadata": {...}, "tags": [...], "project_name": "MyProject"})
-    """
-
-    def __init__(
-        self,
-        example_dir: str = EXAMPLE_DIR,
-        persist_dir: str = PERSIST_DIR,
-        results_dir: str = RESULTS_DIR,
-        retriever_k: int = RETRIEVE_K,
-        model: str = LLM_MODEL,
-        temp_complete: float = TEMPL_COMPLETE,
-        temp_summary: float = TEMP_SUMMARY,
-    ):
-        self.example_dir = example_dir
-        self.persist_dir = persist_dir
-        self.results_dir = results_dir
-        os.makedirs(self.results_dir, exist_ok=True)
-
-        # 1) 예시 로드
-        self.examples = load_example_texts(self.example_dir)
-
-        # 2) RAG
-        self.vs = build_or_load_vectorstore(self.examples, self.persist_dir)
-
-        # 3) 스타일 규칙
-        self.style_rules = summarize_style_rules(self.examples)
-
-        # 4) 길이 정보
-        self.length_info = estimate_target_length(self.examples)
-
-        # 5) LLM 구성
-        self.model_name = model
-        self.temp_complete = temp_complete
-        self.temp_summary = temp_summary
-
-        # 6) 메인 체인
-        self.main_chain = build_completion_chain(
-            style_rules=self.style_rules,
-            vs=self.vs,
-            length_info=self.length_info,
-            retriever_k=retriever_k,
-            model=self.model_name,
-            temp=self.temp_complete,
-        )
-
-    def run(
-        self,
-        user_draft: str,
-        *,
-        save: bool = True,
-        tracing_project: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, str]:
-        """
-        Args:
-            user_draft: 사용자 초안 (중간까지 쓴 글도 가능)
-            save: 결과 파일 저장 여부
-            tracing_project: LangSmith 프로젝트명(없으면 기본)
-            tags: LangSmith 태그 리스트
-            metadata: LangSmith 메타데이터(예: {"topic":"factory-method"})
-
-        Returns:
-            paths: {"completed_md": ..., "change_log_json": ...}
-        """
-        config = {}
-        if tracing_project:
-            config["project_name"] = tracing_project
-        if tags:
-            config["tags"] = tags
-        if metadata:
-            config["metadata"] = metadata
-
-        # 1차 생성 (LangSmith에 태깅)
-        result: CompletionOutput = self.main_chain.invoke(user_draft, config=config)
-
-        # 길이 부족 시 사후 확장
-        if len(result.completed_text) < self.length_info["min_chars"]:
-            expanded = expand_to_min_length(
-                text=result.completed_text,
-                target_min=self.length_info["min_chars"],
-                target_max=self.length_info["max_chars"],
-                model=self.model_name,
-            )
-            result.completed_text = expanded
-            result.change_log.additions.append(
-                f"최소 분량 미달로 사후 확장 수행(→ ≥{self.length_info['min_chars']}자)"
-            )
-
-        paths = {"completed_md": "", "change_log_json": ""}
-        if save:
-            paths = save_result(result, self.results_dir)
-        return paths
