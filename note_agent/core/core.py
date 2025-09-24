@@ -3,9 +3,19 @@ import re
 import json
 from typing import Dict, List
 from datetime import datetime
-from dotenv import load_dotenv
 
-from .model import ProfileHeadInfo, ProfileLengthInfo, NoteAgentOutput
+from note_agent.model import ProfileHeadInfo, ProfileLengthInfo, NoteAgentOutput
+from note_agent.config import (
+    PERSIST_DIR,
+    RESULTS_DIR,
+    EMBEDDING_MODEL,
+    LLM_MODEL,
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    RETRIEVE_K,
+    TEMP_SUMMARY,
+    TEMPL_COMPLETE,
+)
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -13,26 +23,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
-
-# =========================================
-# Environment & Constants
-# =========================================
-load_dotenv()
-assert os.getenv(
-    "OPENAI_API_KEY"
-), "환경 변수 OPENAI_API_KEY 가 필요합니다 (.env 설정)."
-
-PERSIST_DIR = os.getenv("PERSIST_DIR") or "./rag_store"
-RESULTS_DIR = os.getenv("RESULTS_DIR") or "./results"
-
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
-LLM_MODEL = os.getenv("LLM_MODEL") or "gpt-4o-mini"
-
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE") or "900")
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP") or "120")
-RETRIEVE_K = int(os.getenv("RETRIEVE_K") or "3")
-TEMPL_COMPLETE = float(os.getenv("TEMPL_COMPLETE") or "0.2")
-TEMP_SUMMARY = float(os.getenv("TEMP_SUMMARY") or "0.3")
 
 
 def _ensure_dir(path: str) -> str:
@@ -46,6 +36,7 @@ _ensure_dir(RESULTS_DIR)
 # =========================================
 # Main Functions
 # =========================================
+
 
 def estimate_target_length(example_texts: List[str]) -> ProfileLengthInfo:
     """예시 글을 기반으로 길이를 추정하는 함수
@@ -103,7 +94,7 @@ def build_or_load_vectorstore(
     Returns:
         vs (Chroma): 구축된 Chroma 벡터스토어
     """
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 
     if (
         os.path.exists(persist_dir)

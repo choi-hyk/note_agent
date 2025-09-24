@@ -25,22 +25,25 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from .core import (
+from note_agent.core.core import (
     build_or_load_vectorstore,
     summarize_style_rules,
     estimate_target_length,
     define_head_info,
     build_completion_chain,
     expand_to_min_length,
-    LLM_MODEL,
 )
-
-from .model import NoteAgentOutput, ProfileMeta, ProfileLengthInfo, ProfileHeadInfo
+from note_agent.model import (
+    NoteAgentOutput,
+    ProfileMeta,
+    ProfileLengthInfo,
+    ProfileHeadInfo,
+)
+from note_agent.config import DB_URL, PERSIST_DIR, LLM_MODEL
 
 # ============================================================
 # SQLite 설정
 # ============================================================
-DB_URL = os.getenv("DB_URL", "sqlite:///./note_agent.db")
 engine = create_engine(DB_URL, future=True, echo=False)
 SessionLocal = sessionmaker(
     bind=engine, expire_on_commit=False, autoflush=False, future=True
@@ -48,8 +51,7 @@ SessionLocal = sessionmaker(
 
 
 def _persist_dir(profile_id: str) -> str:
-    base = os.getenv("RAG_BASE_DIR", "./rag_store")
-    return os.path.join(base, profile_id)
+    return os.path.join(PERSIST_DIR, profile_id)
 
 
 # ============================================================
@@ -158,6 +160,7 @@ def create_profile(
         p = s.get(ProfileORM, profile_id)
         return _orm_to_meta(p)
 
+
 def update_profile(
     profile_id: str,
     *,
@@ -187,7 +190,7 @@ def update_profile(
             raise FileNotFoundError("Profile not found")
 
         if name is not None and name != p.name:
-            p.name = name 
+            p.name = name
         if description is not None:
             p.description = description
         if head_info is not None:
@@ -243,6 +246,7 @@ def delete_profile(
             pass
 
     return True
+
 
 def load_profile(profile_id: str) -> ProfileMeta:
     """
@@ -367,7 +371,7 @@ def complete_with_profile(
     user_draft: str,
     *,
     retriever_k: int = 3,
-    cache: Optional[Dict[str, Any]] = None
+    cache: Optional[Dict[str, Any]] = None,
 ) -> NoteAgentOutput:
     """프로필 스타일로 글 완성(TOC/본문/변경로그 반환)
 
@@ -396,6 +400,7 @@ def complete_with_profile(
     if chain is None:
         from langchain_openai import OpenAIEmbeddings
         from langchain_chroma import Chroma
+
         embeddings = OpenAIEmbeddings()
         vs = Chroma(embedding_function=embeddings, persist_directory=meta.persist_dir)
         chain = build_completion_chain(
