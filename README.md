@@ -28,7 +28,7 @@ OPENAI_API_KEY=sk-xxxx...
 ## 3) 서버 실행
 
 ```bash
-uvicorn server:app --reload --host 0.0.0.0 --port 8000
+uvicorn note_agent.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 -   Swagger: [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -69,7 +69,7 @@ pip install --no-cache-dir "pydantic==2.9.2" "fastapi==0.112.2" "starlette==0.38
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"
+                "PYTHONPATH": "${workspaceFolder}/note_agent"
             },
             "justMyCode": true,
             "console": "integratedTerminal"
@@ -93,7 +93,7 @@ pip install --no-cache-dir "pydantic==2.9.2" "fastapi==0.112.2" "starlette==0.38
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"
+                "PYTHONPATH": "${workspaceFolder}/note_agent"
             },
             "justMyCode": true,
             "console": "integratedTerminal"
