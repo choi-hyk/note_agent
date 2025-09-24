@@ -56,12 +56,8 @@ htmlcov/
 # -----------------------------
 # 프로젝트 산출물(커밋 제외)
 # -----------------------------
-/results/                 
-/rag_store/               
-/profiles/*/rag_store/   
-/profiles/*/examples/     
-/profiles/*/profile.json
-/examples/
+/note_agent/data/*
+!/note_agent/data/profiles.py
 *.db
 
 
