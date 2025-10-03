@@ -5,7 +5,7 @@ from langserve import add_routes
 from langchain_core.runnables import Runnable
 
 from note_agent.model import NoteAgentInput, NoteAgentOutput
-from note_agent.data.profiles import complete_with_profile, load_profile
+from note_agent.core.profiles import complete_with_profile, load_profile
 from note_agent.api.profile_routers import router as api_profiles_router
 
 
@@ -69,7 +69,7 @@ def _ensure_profile_agent(profile_id: str):
 class NoteAgent(Runnable):
     """
     LangServe에 등록할 Runnable 구현.
-    - 입력(JSON): {"profile_id": "...", "user_draft": "...", "retriever_k": 3}
+    - 입력(JSON): {"profile_id": "...", "user_draft": "...", "user_input": "...", "head_info": "..." "retriever_k": 3}
     - 출력(JSON): complete_with_profile(...) 반환 dict
     """
 
@@ -85,12 +85,23 @@ class NoteAgent(Runnable):
         if not user_draft:
             raise ValueError("user_draft는 필수입니다.")
 
+        user_input = input.get("user_input") or ""
+        if not user_input:
+            raise ValueError("user_input은 필수입니다.")
+
+        head_info = input.get("head_info", None)
+
         retriever_k = input.get("retriever_k", 3)
 
         _ensure_profile_exists(profile_id)
 
         run, _ = _ensure_profile_agent(profile_id)
-        return run(user_draft=user_draft, retriever_k=retriever_k)
+        return run(
+            user_draft=user_draft,
+            user_input=user_input,
+            head_info=head_info,
+            retriever_k=retriever_k,
+        )
 
     async def ainvoke(self, input: dict, config=None):
         if not isinstance(input, dict):
@@ -104,12 +115,23 @@ class NoteAgent(Runnable):
         if not user_draft:
             raise ValueError("user_draft는 필수입니다.")
 
+        user_input = input.get("user_input") or ""
+        if not user_input:
+            raise ValueError("user_input은 필수입니다.")
+
+        head_info = input.get("head_info", None)
+
         retriever_k = input.get("retriever_k", 3)
 
         _ensure_profile_exists(profile_id)
 
         _, arun = _ensure_profile_agent(profile_id)
-        return await arun(user_draft=user_draft, retriever_k=retriever_k)
+        return await arun(
+            user_draft=user_draft,
+            user_input=user_input,
+            head_info=head_info,
+            retriever_k=retriever_k,
+        )
 
     def stream(self, input: dict, config=None):
         yield self.invoke(input, config)

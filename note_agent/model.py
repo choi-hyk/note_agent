@@ -12,7 +12,6 @@ class ProfileLengthInfo(BaseModel):
         avg_chars (int): 평균 길이
         min_chars (int): 최소 길이
         max_chars (int): 최대 길이
-
     """
 
     avg_chars: int
@@ -20,7 +19,7 @@ class ProfileLengthInfo(BaseModel):
     max_chars: int
 
 
-class ProfileHeadInfo(BaseModel):
+class HeadInfo(BaseModel):
     """프로필 예시글 헤더 정보
 
     Attributes:
@@ -54,7 +53,7 @@ class ProfileMeta(BaseModel):
     created_at: str
     style_rules: Optional[str] = None
     length_info: Optional[ProfileLengthInfo] = None
-    head_info: Optional[List[ProfileHeadInfo]] = None
+    head_info: Optional[List[HeadInfo]] = None
     persist_dir: Optional[str] = None
     examples_count: int = 0
 
@@ -68,12 +67,14 @@ class CreateProfileReq(BaseModel):
 
     name: str
     description: str
-    head_info: Optional[List[ProfileHeadInfo]] = None
+    head_info: Optional[List[HeadInfo]] = None
+
 
 class UpdateProfileReq(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    head_info: Optional[List[ProfileHeadInfo]] = None
+    head_info: Optional[List[HeadInfo]] = None
+
 
 class CompleteReq(BaseModel):
     """프로필을 적용하여 완성글 요청
@@ -113,6 +114,8 @@ class ChangeLog(BaseModel):
 class NoteAgentInput(BaseModel):
     profile_id: str = Field(..., description="프로필 ID")
     user_draft: str = Field(..., description="사용자 초안 텍스트")
+    user_input: str = Field(..., description="사용자 입력")
+    head_info: Optional[List[HeadInfo]] = None
     retriever_k: Optional[int] = Field(3, ge=1, description="RAG 검색 문서 수")
 
 
@@ -125,6 +128,5 @@ class NoteAgentOutput(BaseModel):
         change_log: 교정/추가/사실오류 여부를 구조화된 변경 로그로 제공
     """
 
-    toc: List[str] = Field(default_factory=list, description="H1~H4 목차")
-    completed_text: str
-    change_log: ChangeLog
+    completed_text: str = Field(..., description="완성 텍스트")
+    change_log: ChangeLog = Field(..., description="수정된 내용")

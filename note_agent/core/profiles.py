@@ -37,7 +37,7 @@ from note_agent.model import (
     NoteAgentOutput,
     ProfileMeta,
     ProfileLengthInfo,
-    ProfileHeadInfo,
+    HeadInfo,
 )
 from note_agent.config import DB_URL, PERSIST_DIR, LLM_MODEL
 
@@ -113,7 +113,7 @@ def _orm_to_meta(p: ProfileORM) -> ProfileMeta:
         style_rules=p.style_rules,
         length_info=ProfileLengthInfo(**p.length_info) if p.length_info else None,
         head_info=(
-            [ProfileHeadInfo(**h) for h in (p.head_info or [])] if p.head_info else None
+            [HeadInfo(**h) for h in (p.head_info or [])] if p.head_info else None
         ),
         persist_dir=p.persist_dir,
         examples_count=p.examples_count,
@@ -121,7 +121,7 @@ def _orm_to_meta(p: ProfileORM) -> ProfileMeta:
 
 
 def create_profile(
-    name: str, description: str, head_info: Optional[List[ProfileHeadInfo]]
+    name: str, description: str, head_info: Optional[List[HeadInfo]]
 ) -> ProfileMeta:
     """프로필을 생성하는 함수
 
@@ -166,7 +166,7 @@ def update_profile(
     *,
     name: Optional[str] = None,
     description: Optional[str] = None,
-    head_info: Optional[List[ProfileHeadInfo]] = None,
+    head_info: Optional[List[HeadInfo]] = None,
 ) -> ProfileMeta:
     """
     프로필 메타데이터 부분 수정(Partial Update)

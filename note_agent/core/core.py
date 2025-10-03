@@ -1,10 +1,10 @@
 import os
 import re
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 
-from note_agent.model import ProfileHeadInfo, ProfileLengthInfo, NoteAgentOutput
+from note_agent.model import HeadInfo, ProfileLengthInfo, NoteAgentOutput
 from note_agent.config import (
     PERSIST_DIR,
     RESULTS_DIR,
@@ -59,7 +59,7 @@ def estimate_target_length(example_texts: List[str]) -> ProfileLengthInfo:
 HEADER_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
 
 
-def define_head_info(example_texts: List[str]) -> List[ProfileHeadInfo]:
+def define_head_info(example_texts: List[str]) -> List[HeadInfo]:
     """예시 글을 기반으로 헤더 정보를 정의하는 함수
 
     Args:
@@ -78,7 +78,7 @@ def define_head_info(example_texts: List[str]) -> List[ProfileHeadInfo]:
             if key in seen:
                 continue
             seen.add(key)
-            results.append(ProfileHeadInfo(level=f"H{level}", title=title))
+            results.append(HeadInfo(level=f"H{level}", title=title))
     return results
 
 
@@ -167,8 +167,8 @@ prompt = ChatPromptTemplate.from_messages(
             "3) **사실관계 임의 추가 금지**, 한국어만 사용, 외국어/잡문자 금지.\n"
             "4) 스타일 규칙에서 분석된 어조 중 가장 유력한 어조 하나만 일관되게 적용한다.\n"
             "5) 출력은 내부적으로 **구조화 객체(스키마)**로만 생성한다. 그 외 텍스트 생성 금지.\n"
-            "6) **목차(TOC)는 H1~H3 레벨만** 생성한다. 각 항목은 (level, title) 형태이며 level은 1/2/3 중 하나만 허용한다.\n"
-            "7) **본문은 반드시 이 TOC 순서**에 맞춰 작성하며, Markdown 헤더 표기(#, ##, ###)로 레벨을 정확히 표시한다.\n"
+            "6) **목차(TOC)** {head_info}가 정의된 경우 해당 헤더를 기반으로 만든다.반드시 해당 헤더만 포함한 내용으로 만든다.\n"
+            "7) **본문은 반드시 이 {head_info}에 맞춰 작성하며, Markdown 헤더 표기(#, ##, ###, ####)로 레벨을 정확히 표시한다.\n"
             "8) 전체 길이는 예시 기준 분량을 따른다(약 {length_avg_chars}자, 허용 범위 {length_min_chars}~{length_max_chars}자). "
             "최소 {length_min_chars}자 미만이 되지 않게 충분히 서술하라.\n\n"
             "참고 문체 조각(예시 기반 검색 결과):\n{context}\n",
@@ -178,7 +178,7 @@ prompt = ChatPromptTemplate.from_messages(
             "사용자 초안(한국어, 없으면 빈 문자열 허용):\n{user_input}\n\n"
             "요구사항:\n"
             "- 먼저 이 글에 적합한 **목차(TOC)**를 H1~H3만으로 생성한다. 각 항목은 level(1/2/3), title을 포함한다.\n"
-            "- 이어서 **TOC 순서대로** 본문을 작성하되, Markdown 헤더 #/##/###를 사용하여 레벨을 정확히 반영한다.\n"
+            "- 이어서 **{head_info} 순서대로** 본문을 작성하되, Markdown 헤더 #/##/###를 사용하여 레벨을 정확히 반영한다.\n"
             "- 길이는 {length_min_chars}~{length_max_chars}자 범위로 맞추고 가능하면 {length_avg_chars}자 근처로 작성한다.\n"
             "- 마지막으로 교정/추가/사실오류 여부를 **구조화된 변경 로그**로 제공한다.\n"
             "- 스키마 외 불필요한 텍스트는 생성하지 말라.",
@@ -225,6 +225,7 @@ def build_completion_chain(
     style_rules: str,
     vs: Chroma,
     length_info: dict,
+    head_info: Optional[dict],
     retriever_k: int = RETRIEVE_K,
     model: str = LLM_MODEL,
     temp: float = TEMPL_COMPLETE,
@@ -260,6 +261,7 @@ def build_completion_chain(
             "context": retriever | format_docs,
             "user_input": RunnablePassthrough(),
             "style_rules": lambda _: style_rules,
+            "head_info": lambda _: head_info,
             "length_avg_chars": lambda _: length_info.avg_chars,
             "length_min_chars": lambda _: length_info.min_chars,
             "length_max_chars": lambda _: length_info.max_chars,

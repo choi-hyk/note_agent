@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile, Request
 from typing import Dict, Any, List, Optional
 
-from note_agent.data.profiles import (
+from note_agent.core.profiles import (
     create_profile,
     update_profile,
     delete_profile,
@@ -43,7 +43,7 @@ def _safe_read_text(file: UploadFile) -> Optional[str]:
     response_model=Dict[str, Any],
     response_description="생성된 프로필 메타데이터를 반환합니다.",
 )
-def api_create_profile(req: CreateProfileReq):
+async def api_create_profile(req: CreateProfileReq):
     meta = create_profile(req.name, req.description, req.head_info)
     return {"profile": meta.model_dump()}
 
@@ -53,7 +53,7 @@ def api_create_profile(req: CreateProfileReq):
     summary="프로필 메타 업데이트(부분 수정)",
     response_model=Dict[str, Any],
 )
-def api_update_profile(profile_id: str, req: UpdateProfileReq):
+async def api_update_profile(profile_id: str, req: UpdateProfileReq):
     try:
         meta = update_profile(
             profile_id,
@@ -73,7 +73,7 @@ def api_update_profile(profile_id: str, req: UpdateProfileReq):
     summary="프로필 삭제(예시/벡터스토어 포함)",
     response_model=Dict[str, Any],
 )
-def api_delete_profile(profile_id: str, drop_vectorstore: bool = True):
+async def api_delete_profile(profile_id: str, drop_vectorstore: bool = True):
     ok = delete_profile(profile_id, drop_vectorstore=drop_vectorstore)
     if not ok:
         raise HTTPException(status_code=404, detail="프로필을 찾을 수 없습니다.")
@@ -87,7 +87,7 @@ def api_delete_profile(profile_id: str, drop_vectorstore: bool = True):
     response_model=Dict[str, Any],
     response_description="프로필 메타데이터 리스트",
 )
-def api_list_profiles():
+async def api_list_profiles():
     metas = [m.model_dump() for m in list_profiles()]
     return {"profiles": metas}
 
@@ -99,7 +99,7 @@ def api_list_profiles():
     response_model=Dict[str, Any],
     response_description="프로필 메타데이터",
 )
-def api_get_profile(profile_id: str):
+async def api_get_profile(profile_id: str):
     try:
         meta = load_profile(profile_id)
     except FileNotFoundError:
@@ -149,7 +149,7 @@ async def api_add_examples(
     response_model=Dict[str, Any],
     response_description="업데이트된 프로필 메타데이터",
 )
-def api_train_profile(profile_id: str):
+async def api_train_profile(profile_id: str):
     try:
         meta = train_profile(profile_id)
     except FileNotFoundError:
@@ -168,7 +168,7 @@ def api_train_profile(profile_id: str):
     response_model=Dict[str, Any],
     response_description="완성 결과",
 )
-def api_complete_with_profile(
+async def api_complete_with_profile(
     profile_id: str, req: CompleteReq, request: Request
 ) -> Dict[str, Any]:
     try:
