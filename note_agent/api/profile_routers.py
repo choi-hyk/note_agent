@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile, Request
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 from note_agent.core.profiles import (
     create_profile,
@@ -117,19 +117,17 @@ async def api_get_profile(profile_id: str):
 )
 async def api_add_examples(
     profile_id: str,
-    texts: Optional[List[str]] = Form(None, description="예시 텍스트(여러 개 가능)"),
-    files: Optional[List[UploadFile]] = File(
-        None, description="예시 파일(한 개 이상 가능)"
+    text: Optional[str] = Form(None, description="예시 텍스트"),
+    file: Optional[UploadFile] = File(
+        None, description="예시 파일"
     ),
 ):
     try:
         collected: List[str] = []
-        texts_list: List[str] = [t.strip() for t in texts if t and t.strip()]
-        files_list: List[UploadFile] = files
-        if texts_list:
-            collected += [t.strip() for t in texts_list if t and t.strip()]
-        for f in files_list:
-            content = _safe_read_text(f)
+        if text is not None:
+            collected += text.strip()
+        if file is not None:
+            content = _safe_read_text(file)
             if content:
                 collected.append(content)
         if not collected:

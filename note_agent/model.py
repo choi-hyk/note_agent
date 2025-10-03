@@ -123,10 +123,22 @@ class NoteAgentOutput(BaseModel):
     """완성된 글의 구조화된 출력
 
     Attributes:
-        toc: 생성된 목차(상위 헤딩 순서)
+        draft_corrected: 교정된 사용자 초안
+        body: 생성된 본문
+        head_info: 헤더 정보
         completed_text: 목차 순서대로 전개된 최종 본문
         change_log: 교정/추가/사실오류 여부를 구조화된 변경 로그로 제공
     """
 
-    completed_text: str = Field(..., description="완성 텍스트")
-    change_log: ChangeLog = Field(..., description="수정된 내용")
+    draft_corrected: str = ""      
+    body: str = ""                 
+    head_info: Optional[List[HeadInfo]] = None
+    completed_text: Optional[str] = None
+    change_log: ChangeLog = ChangeLog()
+
+class ExpandedOutput(BaseModel):
+    """확장 후 반환할 글의 구조화된 출력"""
+
+    body: str = ""                 
+    completed_text: Optional[str] = None
+    change_log: ChangeLog = ChangeLog()

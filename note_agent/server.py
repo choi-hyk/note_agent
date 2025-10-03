@@ -1,10 +1,11 @@
+from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from langserve import add_routes
 from langchain_core.runnables import Runnable
 
-from note_agent.model import NoteAgentInput, NoteAgentOutput
+from note_agent.model import NoteAgentInput, NoteAgentOutput, HeadInfo
 from note_agent.core.profiles import complete_with_profile, load_profile
 from note_agent.api.profile_routers import router as api_profiles_router
 
@@ -36,9 +37,9 @@ app.add_middleware(
 )
 
 
-# ------------------------------
+#------------------------------
 # NoteAgent
-# -----------------------------
+#------------------------------
 def _ensure_profile_exists(profile_id: str):
     try:
         return load_profile(profile_id)
@@ -51,16 +52,18 @@ def _ensure_profile_agent(profile_id: str):
     if cached:
         return cached
 
-    def _run(user_draft: str, retriever_k: int | None):
+    def _run(user_draft: str, user_input: str, head_info: List[HeadInfo] | None, retriever_k: int | None):
         return complete_with_profile(
             profile_id=profile_id,
             user_draft=user_draft,
+            user_input=user_input,
+            head_info=head_info,
             retriever_k=retriever_k if retriever_k is not None else 3,
             cache=cached,
         )
 
-    async def _arun(user_draft: str, retriever_k: int | None):
-        return _run(user_draft, retriever_k)
+    async def _arun(user_draft: str, user_input: str, head_info: List[HeadInfo] | None, retriever_k: int | None):
+        return _run(user_draft, user_input, head_info, retriever_k)
 
     app.state.profile_agents[profile_id] = (_run, _arun)
     return app.state.profile_agents[profile_id]

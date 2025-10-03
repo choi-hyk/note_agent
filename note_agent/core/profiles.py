@@ -31,7 +31,7 @@ from note_agent.core.core import (
     estimate_target_length,
     define_head_info,
     build_completion_chain,
-    expand_to_min_length,
+    finalize_with_expansion,
 )
 from note_agent.model import (
     NoteAgentOutput,
@@ -41,9 +41,9 @@ from note_agent.model import (
 )
 from note_agent.config import DB_URL, PERSIST_DIR, LLM_MODEL
 
-# ============================================================
+#------------------------------
 # SQLite 설정
-# ============================================================
+#------------------------------
 engine = create_engine(DB_URL, future=True, echo=False)
 SessionLocal = sessionmaker(
     bind=engine, expire_on_commit=False, autoflush=False, future=True
@@ -54,9 +54,9 @@ def _persist_dir(profile_id: str) -> str:
     return os.path.join(PERSIST_DIR, profile_id)
 
 
-# ============================================================
+#------------------------------
 # ORM 모델
-# ============================================================
+#------------------------------
 class Base(DeclarativeBase):
     pass
 
@@ -101,9 +101,9 @@ class ProfileExampleORM(Base):
 Base.metadata.create_all(bind=engine)
 
 
-# ============================================================
+#------------------------------
 # 변환기 (ORM → Pydantic)
-# ============================================================
+#------------------------------
 def _orm_to_meta(p: ProfileORM) -> ProfileMeta:
     return ProfileMeta(
         profile_id=p.id,
@@ -369,20 +369,23 @@ def train_profile(profile_id: str) -> ProfileMeta:
 def complete_with_profile(
     profile_id: str,
     user_draft: str,
-    *,
+    user_input: str,
+    head_info: Optional[List[HeadInfo]] = None,
     retriever_k: int = 3,
     cache: Optional[Dict[str, Any]] = None,
 ) -> NoteAgentOutput:
     """프로필 스타일로 글 완성(TOC/본문/변경로그 반환)
 
     Args:
-        profile_id: 프로필 ID
-        user_draft: 사용자가 작성한 초안
-        retriever_k: RAG 검색 시 상위 k개 문서 활용(기본 3)
-        cache: 프로필 에이전트 캐시
+        profile_id (str): 프로필 ID
+        user_draft (str): 사용자가 작성한 초안
+        user_input (str): 사용자 지시사항
+        head_info (List[HeadInfo] | None): 사용자 기반 헤더 설정
+        retriever_k (int): RAG 검색 시 상위 k개 문서 활용(기본 3)
+        cache (Dict[str, Any] | None): 프로필 에이전트 캐시
 
     Returns:
-        out (Dict[str, Any]): 완성 결과
+        out (NoteAgentOutput): 완성 결과
     """
     chain = None
     meta = None
@@ -407,27 +410,21 @@ def complete_with_profile(
             style_rules=meta.style_rules,
             vs=vs,
             length_info=meta.length_info,
+            head_info=head_info if head_info else meta.head_info,
             retriever_k=retriever_k,
         )
         if cache is not None:
             cache[profile_id] = (chain, meta)
 
-    result = chain.invoke(user_draft)
+    result: NoteAgentOutput = chain.invoke({       
+        "user_input": user_input,
+        "user_draft": user_draft,
+        })
 
-    if len(result.completed_text) < meta.length_info.min_chars:
-        expanded = expand_to_min_length(
-            text=result.completed_text,
-            target_min=meta.length_info.min_chars,
-            target_max=meta.length_info.max_chars,
-            model=LLM_MODEL,
-        )
-        result.completed_text = expanded
-        result.change_log.additions.append(
-            f"최소 분량 미달로 사후 확장 수행(→ ≥{meta.length_info.min_chars}자)"
-        )
-
-    return NoteAgentOutput(
-        toc=result.toc,
-        completed_text=result.completed_text,
-        change_log=result.change_log,
+    result = finalize_with_expansion(
+        result=result,
+        length_info=meta.length_info,
+        model=LLM_MODEL,
     )
+
+    return result
